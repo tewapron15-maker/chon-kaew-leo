@@ -307,8 +307,9 @@ async function handleMyPhotoFile(file){
     render();
   }catch(e){
     console.error(e);
-    state.entryError = 'ใส่รูปไม่สำเร็จ (อาจเพราะรูปใหญ่เกินไปหรือหน่วยความจำเครื่องเหลือน้อย) ลองปิดแท็บ/แอปอื่นแล้วลองใหม่ หรือเลือกรูปที่มีขนาดเล็กลง';
-    render();
+    const msg = 'ใส่รูปไม่สำเร็จ (อาจเพราะรูปใหญ่เกินไปหรือหน่วยความจำเครื่องเหลือน้อย) ลองปิดแท็บ/แอปอื่นแล้วลองใหม่ หรือเลือกรูปที่มีขนาดเล็กลง';
+    if(state.screen==='entry'){ state.entryError = msg; render(); }
+    else { alert(msg); }
   }
 }
 
@@ -669,10 +670,14 @@ function renderLobby(){
 
   const rows = pids.map(pid=>{
     const p = players[pid];
+    const isMe = pid===state.myId;
     const avatar = p.photo ? `<img class="lobby-avatar" src="${p.photo}">` : `<div class="lobby-avatar-ph" style="background:${AVATAR_COLORS[pid.length%AVATAR_COLORS.length]}">${esc((p.name||'?').trim()[0]||'?').toUpperCase()}</div>`;
     return `
       <div class="lobby-row">
-        ${avatar}
+        <div class="avatar-wrap" style="width:40px;height:40px;">
+          ${avatar}
+          ${isMe ? `<button class="photo-btn" id="lobby-change-photo-btn" title="เปลี่ยนรูป">📷</button><input type="file" accept="image/*" capture="user" id="lobby-change-photo-input" style="display:none">` : ''}
+        </div>
         <div class="lobby-name">
           <span class="online-dot ${p.online?'on':''}"></span>
           ${esc(p.name||'ผู้เล่น')}
@@ -737,6 +742,9 @@ function renderMyCardReveal(){
       <div class="reveal-count-badge">จำนวนผู้เล่น ${pids.length} คน</div>
     </div>
     <button class="btn btn-primary" id="reveal-open-btn" ${animating?'disabled':''}>${animating?'กำลังเปิด...':'เปิดการ์ด 🔓'}</button>
+    <div style="height:10px"></div>
+    <button class="btn btn-ghost" id="reveal-change-photo-btn" ${animating?'disabled':''}>📷 เปลี่ยนรูปของฉัน</button>
+    <input type="file" accept="image/*" capture="user" id="reveal-change-photo-input" style="display:none">
     <div style="height:10px"></div>
     <button class="btn btn-ghost" id="leave-room-btn" ${animating?'disabled':''}>ออกจากห้อง</button>
   `;
@@ -937,6 +945,18 @@ function bindEvents(){
   if(myPhotoBtn && myPhotoInput){
     myPhotoBtn.onclick = ()=> myPhotoInput.click();
     myPhotoInput.onchange = ()=>{ const f=myPhotoInput.files&&myPhotoInput.files[0]; if(f) handleMyPhotoFile(f); };
+  }
+  const lobbyPhotoBtn = document.getElementById('lobby-change-photo-btn');
+  const lobbyPhotoInput = document.getElementById('lobby-change-photo-input');
+  if(lobbyPhotoBtn && lobbyPhotoInput){
+    lobbyPhotoBtn.onclick = ()=> lobbyPhotoInput.click();
+    lobbyPhotoInput.onchange = ()=>{ const f=lobbyPhotoInput.files&&lobbyPhotoInput.files[0]; if(f) handleMyPhotoFile(f); };
+  }
+  const revealPhotoBtn = document.getElementById('reveal-change-photo-btn');
+  const revealPhotoInput = document.getElementById('reveal-change-photo-input');
+  if(revealPhotoBtn && revealPhotoInput){
+    revealPhotoBtn.onclick = ()=> revealPhotoInput.click();
+    revealPhotoInput.onchange = ()=>{ const f=revealPhotoInput.files&&revealPhotoInput.files[0]; if(f) handleMyPhotoFile(f); };
   }
   const joinCodeInput = document.getElementById('join-code-input');
   if(joinCodeInput) joinCodeInput.oninput = ()=>{ state.joinCodeInput = joinCodeInput.value.toUpperCase(); };
