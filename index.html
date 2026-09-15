@@ -352,6 +352,7 @@ async function createRoom(){
     players:{ [state.myId]:{ name: state.myName.trim(), photo: state.myPhoto||null, online:true, lastSeen: Date.now() } },
     settings: templateSettings,
     piles:{ challengePile: [], penaltyPile: [] },
+    playCounts: {},
     round: null
   };
   try{
@@ -392,6 +393,19 @@ function enterRoom(code){
   render();
 }
 
+/* ============ Render scheduling (avoid redrawing mid-click/tap) ============ */
+let pointerDown = false;
+let renderQueued = false;
+function flushQueuedRender(){ if(renderQueued){ renderQueued=false; render(); } }
+document.addEventListener('mousedown', ()=>{ pointerDown=true; }, true);
+document.addEventListener('touchstart', ()=>{ pointerDown=true; }, true);
+document.addEventListener('mouseup', ()=>{ pointerDown=false; setTimeout(flushQueuedRender,0); }, true);
+document.addEventListener('touchend', ()=>{ pointerDown=false; setTimeout(flushQueuedRender,0); }, true);
+function scheduleRender(){
+  if(pointerDown){ renderQueued=true; return; }
+  render();
+}
+
 function attachRoomListener(){
   if(roomListenerRef) roomListenerRef.off();
   roomListenerRef = fbDb.ref('rooms/'+state.roomCode);
@@ -399,12 +413,12 @@ function attachRoomListener(){
     if(!snap.exists()){
       state.room=null; state.roomCode=null; state.screen='entry';
       localStorage.removeItem('chonkaew_room_code');
-      render(); return;
+      scheduleRender(); return;
     }
     state.room = snap.val();
     if(state.room.meta && state.room.meta.status==='playing') state.screen='game';
     else if(state.screen==='connecting' || state.screen==='game') state.screen='lobby';
-    render();
+    scheduleRender();
   });
 }
 
@@ -451,14 +465,22 @@ async function hostStartGame(){
 async function dealNewRound(){
   const types = state.room.settings.cardTypes;
   const playerIds = Object.keys(state.room.players||{});
-  const shuffled = shuffle(playerIds);
-  const pairIds = shuffled.slice(0,2);
+  const counts = state.room.playCounts || {};
+  // shuffle first (for randomness among ties), then sort by fewest past battles so
+  // everyone gets a turn before anyone repeats
+  const sorted = shuffle(playerIds).sort((a,b)=> (counts[a]||0) - (counts[b]||0));
+  const pairIds = sorted.slice(0,2);
   const type = types[Math.floor(Math.random()*types.length)];
   const assignments = {}; const opened = {};
   pairIds.forEach(pid=>{ assignments[pid]=type.id; opened[pid]=false; });
   const newRoundNum = ((state.room.meta && state.room.meta.roundNumber)||0)+1;
-  await myRoomRef('round').set({ number:newRoundNum, pairIds, assignments, opened, battle:null });
-  await myRoomRef('meta/roundNumber').set(newRoundNum);
+  const newCounts = {...counts};
+  pairIds.forEach(pid=>{ newCounts[pid] = (newCounts[pid]||0)+1; });
+  await myRoomRef().update({
+    'round': { number:newRoundNum, pairIds, assignments, opened, battle:null },
+    'meta/roundNumber': newRoundNum,
+    'playCounts': newCounts
+  });
 }
 
 async function openMyCard(){
@@ -981,7 +1003,30 @@ function bindEvents(){
   }
 }
 
+/* ============ Housekeeping: delete stale rooms (older than 24h) ============ */
+async function cleanupOldRooms(){
+  if(!fbDb) return;
+  try{
+    const snap = await fbDb.ref('rooms').once('value');
+    if(!snap.exists()) return;
+    const ONE_DAY = 24*60*60*1000;
+    const now = Date.now();
+    const updates = {};
+    snap.forEach(child=>{
+      const val = child.val();
+      const createdAt = val && val.meta && val.meta.createdAt;
+      if(createdAt && (now - createdAt) > ONE_DAY){
+        updates[child.key] = null; // deletes that room
+      }
+    });
+    if(Object.keys(updates).length){
+      await fbDb.ref('rooms').update(updates);
+    }
+  }catch(e){ console.error('ล้างห้องเก่าไม่สำเร็จ', e); }
+}
+
 /* ============ Init ============ */
+cleanupOldRooms();
 tryAutoRejoin();
 </script>
 </body>
