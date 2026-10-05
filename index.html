@@ -502,26 +502,27 @@ async function dealNewRound(){
   });
 }
 
-async function openMyCard(){
-  if(!state.room.round) return;
-  await myRoomRef('round/opened/'+state.myId).set(true);
-}
-
-function handleRevealOpenClick(){
-  if(state.revealAnimating) return;
-  state.revealAnimating = true;
-  render();
-  setTimeout(()=>{
-    openMyCard();
-    state.revealAnimating = false;
-  }, 800);
-}
-
 async function hostOpenAll(){
   if(!isHost() || !state.room.round) return;
   const updates = {};
   (state.room.round.pairIds||[]).forEach(pid=>{ updates['round/opened/'+pid] = true; });
   await myRoomRef().update(updates);
+}
+
+function handleHostOpenClick(){
+  if(!isHost() || state.revealAnimating) return;
+  const amInPair = (state.room.round.pairIds||[]).includes(state.myId);
+  if(amInPair){
+    // Host is one of the pair: play the local flip animation on their own card first
+    state.revealAnimating = true;
+    render();
+    setTimeout(()=>{
+      hostOpenAll();
+      state.revealAnimating = false;
+    }, 800);
+  } else {
+    hostOpenAll();
+  }
 }
 
 function battleIsReady(){
@@ -759,7 +760,10 @@ function renderMyCardReveal(){
       <div class="reveal-round-badge">รอบที่ ${round.number}</div>
       <div class="reveal-count-badge">จำนวนผู้เล่น ${pids.length} คน</div>
     </div>
-    <button class="btn btn-primary" id="reveal-open-btn" ${animating?'disabled':''}>${animating?'กำลังเปิด...':'เปิดการ์ด 🔓'}</button>
+    ${isHost()
+      ? `<button class="btn btn-primary" id="host-open-pair-btn" ${animating?'disabled':''}>${animating?'กำลังเปิด...':'👑 เปิดการ์ดคู่นี้ 🔓'}</button>`
+      : `<div class="waiting-msg">⏳ รอ Host เปิดการ์ด...</div>`
+    }
     <div style="height:10px"></div>
     <button class="btn btn-ghost" id="reveal-change-photo-btn" ${animating?'disabled':''}>📷 เปลี่ยนรูปของฉัน</button>
     <input type="file" accept="image/*" capture="user" id="reveal-change-photo-input" style="display:none">
@@ -820,7 +824,16 @@ function renderGame(){
   let battleHtml = '';
 
   if(!bothOpened){
-    battleHtml = `<div class="waiting-msg">⏳ รอ ${esc(pairNames)} เปิดการ์ดของตัวเองให้ครบก่อน...</div>`;
+    battleHtml = `
+      <div class="battle-panel">
+        <div class="battle-title">🎴 คู่ปะทะรอบนี้</div>
+        <div class="vs-names">${esc(pairNames)}</div>
+        ${iAmHost
+          ? `<button class="btn btn-primary" id="host-open-pair-btn-grid">👑 เปิดการ์ดคู่นี้ 🔓</button>`
+          : `<div class="waiting-msg">⏳ รอ Host เปิดการ์ด...</div>`
+        }
+      </div>
+    `;
   } else if(!battle){
     const t = typeById(round.assignments[pairIds[0]]);
     battleHtml = `
@@ -882,7 +895,6 @@ function renderGame(){
     ${battleHtml}
     ${spectatorIds.length ? `<div class="muted" style="text-align:center;margin-bottom:14px;">🎲 รอบนี้ไม่ได้ลงเล่น: ${esc(spectatorNames)}</div>` : ''}
     <div class="actions">
-      ${isHost() ? `<button class="btn btn-ghost" id="host-open-all-btn">👑 เปิดการ์ดทั้งหมด</button>` : ''}
       ${isHost()
         ? `<button class="btn btn-teal" id="next-round-btn" ${canNextRound?'':'disabled'}>▶️ รอบถัดไป (สุ่มคู่ใหม่)</button>`
         : `<div class="waiting-msg">⏳ รอ Host เริ่มรอบถัดไป...</div>`
@@ -996,10 +1008,10 @@ function bindEvents(){
   const leaveBtn = document.getElementById('leave-room-btn');
   if(leaveBtn) leaveBtn.onclick = leaveRoom;
 
-  const revealOpenBtn = document.getElementById('reveal-open-btn');
-  if(revealOpenBtn) revealOpenBtn.onclick = handleRevealOpenClick;
-  const hostOpenAllBtn = document.getElementById('host-open-all-btn');
-  if(hostOpenAllBtn) hostOpenAllBtn.onclick = hostOpenAll;
+  const hostOpenPairBtn = document.getElementById('host-open-pair-btn');
+  if(hostOpenPairBtn) hostOpenPairBtn.onclick = handleHostOpenClick;
+  const hostOpenPairBtnGrid = document.getElementById('host-open-pair-btn-grid');
+  if(hostOpenPairBtnGrid) hostOpenPairBtnGrid.onclick = handleHostOpenClick;
   const nextRoundBtn = document.getElementById('next-round-btn');
   if(nextRoundBtn) nextRoundBtn.onclick = hostNextRound;
 
