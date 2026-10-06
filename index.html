@@ -333,6 +333,9 @@ async function handleMyPhotoFile(file){
 
 /* ============ Settings template (persists across rooms) ============ */
 const TEMPLATE_PATH = 'templates/mainSettings';
+const DEFAULT_SPECIAL_CARD = { photo:null, name:'', penaltyText:'' };
+const SPECIAL_CARD_CHANCE = 0.15; // ~15% per card-open — "rare"
+
 async function loadTemplateSettings(){
   try{
     const snap = await fbDb.ref(TEMPLATE_PATH).once('value');
@@ -341,11 +344,12 @@ async function loadTemplateSettings(){
       return {
         cardTypes: (Array.isArray(v.cardTypes) && v.cardTypes.length>=2) ? v.cardTypes : DEFAULT_TYPES,
         challenges: (Array.isArray(v.challenges) && v.challenges.length) ? v.challenges : DEFAULT_CHALLENGES,
-        penalties: (Array.isArray(v.penalties) && v.penalties.length) ? v.penalties : DEFAULT_PENALTIES
+        penalties: (Array.isArray(v.penalties) && v.penalties.length) ? v.penalties : DEFAULT_PENALTIES,
+        specialCard: (v.specialCard && typeof v.specialCard==='object') ? v.specialCard : {...DEFAULT_SPECIAL_CARD}
       };
     }
   }catch(e){ console.error('โหลดค่าเริ่มต้นที่บันทึกไว้ไม่สำเร็จ', e); }
-  return { cardTypes: DEFAULT_TYPES, challenges: DEFAULT_CHALLENGES, penalties: DEFAULT_PENALTIES };
+  return { cardTypes: DEFAULT_TYPES, challenges: DEFAULT_CHALLENGES, penalties: DEFAULT_PENALTIES, specialCard: {...DEFAULT_SPECIAL_CARD} };
 }
 async function saveAsTemplate(){
   if(!state.room) return;
@@ -353,9 +357,28 @@ async function saveAsTemplate(){
     await fbDb.ref(TEMPLATE_PATH).set({
       cardTypes: state.room.settings.cardTypes,
       challenges: state.room.settings.challenges,
-      penalties: state.room.settings.penalties
+      penalties: state.room.settings.penalties,
+      specialCard: state.room.settings.specialCard || {...DEFAULT_SPECIAL_CARD}
     });
   }catch(e){ console.error('บันทึกค่าเริ่มต้นไม่สำเร็จ', e); }
+}
+
+async function updateSpecialCard(field, value){
+  if(!state.room) return;
+  const current = state.room.settings.specialCard || {...DEFAULT_SPECIAL_CARD};
+  await myRoomRef('settings/specialCard').set({...current, [field]: value});
+  saveAsTemplate();
+}
+async function handleSpecialCardPhotoFile(file){
+  if(!file) return;
+  try{
+    const dataUrl = await compressImage(file, 300, 0.75);
+    await updateSpecialCard('photo', dataUrl);
+    render();
+  }catch(e){
+    console.error(e);
+    alert('ใส่รูปการ์ดพิเศษไม่สำเร็จ ลองรูปอื่นหรือรูปที่เล็กลง');
+  }
 }
 
 /* ============ Room lifecycle ============ */
@@ -496,7 +519,7 @@ async function dealNewRound(){
   const newCounts = {...counts};
   pairIds.forEach(pid=>{ newCounts[pid] = (newCounts[pid]||0)+1; });
   await myRoomRef().update({
-    'round': { number:newRoundNum, pairIds, assignments, opened, battle:null },
+    'round': { number:newRoundNum, pairIds, assignments, opened, battle:null, special:null },
     'meta/roundNumber': newRoundNum,
     'playCounts': newCounts
   });
@@ -504,8 +527,21 @@ async function dealNewRound(){
 
 async function hostOpenAll(){
   if(!isHost() || !state.room.round) return;
+  const pairIds = state.room.round.pairIds || [];
   const updates = {};
-  (state.room.round.pairIds||[]).forEach(pid=>{ updates['round/opened/'+pid] = true; });
+  pairIds.forEach(pid=>{ updates['round/opened/'+pid] = true; });
+
+  const special = state.room.settings.specialCard;
+  const specialConfigured = special && (special.name||'').trim() && (special.penaltyText||'').trim();
+  if(specialConfigured && pairIds.length && Math.random() < SPECIAL_CARD_CHANCE){
+    const luckyPid = pairIds[Math.floor(Math.random()*pairIds.length)];
+    updates['round/special'] = {
+      playerId: luckyPid,
+      cardName: special.name || '',
+      cardPhoto: special.photo || null,
+      penaltyText: special.penaltyText || ''
+    };
+  }
   await myRoomRef().update(updates);
 }
 
@@ -568,6 +604,7 @@ async function hostConfirmPenalty(){
 
 function allBattlesResolved(){
   const round = state.room && state.room.round; if(!round) return false;
+  if(round.special) return true;
   return !!(round.battle && round.battle.state==='resolved');
 }
 async function hostNextRound(){
@@ -772,9 +809,44 @@ function renderMyCardReveal(){
   `;
 }
 
+function renderSpecialCardScreen(round){
+  const sp = round.special;
+  const victimName = playerName(sp.playerId);
+  const pids = Object.keys(state.room.players||{});
+  return `
+    <div class="round-tag">
+      <div class="num">รอบที่ ${round.number}</div>
+      <div class="num">${pids.length} ผู้เล่น</div>
+    </div>
+    <div class="battle-panel" style="background:linear-gradient(160deg, rgba(255,178,56,0.24), rgba(255,77,141,0.14)); border-color:rgba(255,178,56,0.45); text-align:center;">
+      <div style="font-family:'Kanit'; font-weight:800; font-size:21px; margin-bottom:12px;">⚡ การ์ดพิเศษ!</div>
+      ${sp.cardPhoto
+        ? `<img src="${sp.cardPhoto}" style="width:150px;height:150px;object-fit:cover;border-radius:20px;margin:0 auto 14px;display:block;border:2px solid rgba(255,255,255,0.3);">`
+        : `<div style="font-size:72px;margin-bottom:12px;">🎴</div>`
+      }
+      ${sp.cardName ? `<div style="font-family:'Kanit';font-weight:700;font-size:18px;margin-bottom:12px;">${esc(sp.cardName)}</div>` : ''}
+      <div class="vs-names" style="margin-bottom:16px;">โดนเข้าเต็มๆ: <strong style="color:var(--text)">${esc(victimName)}</strong></div>
+      <div class="penalty-box" style="text-align:left;">
+        <div class="ptag">บทลงโทษ</div>
+        <div class="ptext">${esc(sp.penaltyText)}</div>
+      </div>
+    </div>
+    <div class="actions">
+      ${isHost()
+        ? `<button class="btn btn-teal" id="next-round-btn">▶️ รอบถัดไป (สุ่มคู่ใหม่)</button>`
+        : `<div class="waiting-msg">⏳ รอ Host เริ่มรอบถัดไป...</div>`
+      }
+      <button class="btn btn-ghost" id="leave-room-btn">ออกจากห้อง</button>
+    </div>
+  `;
+}
+
 function renderGame(){
   const round = state.room.round;
   if(!round) return `<div class="loading-screen">กำลังเตรียมรอบ...</div>`;
+  if(round.special){
+    return renderSpecialCardScreen(round);
+  }
   const pairIds = round.pairIds || [];
   const amInPair = pairIds.includes(state.myId);
 
@@ -946,6 +1018,26 @@ function renderSettings(){
         <button id="add-penalty-btn">＋</button>
       </div>
     `;
+  } else if(tab==='special'){
+    const sc = s.specialCard || {...DEFAULT_SPECIAL_CARD};
+    const configured = (sc.name||'').trim() && (sc.penaltyText||'').trim();
+    body = `
+      <div class="muted" style="margin-bottom:14px;">
+        การ์ดพิเศษ 1 ใบ — ตอน Host เปิดการ์ดคู่ไหนก็ตาม มีโอกาส ~${Math.round(SPECIAL_CARD_CHANCE*100)}% ที่จะสุ่มคนในคู่นั้นมาโดนการ์ดนี้ทันที พร้อมบทลงโทษที่ตั้งไว้ (ไม่ต้องผ่าน Challenge)
+        ${configured ? `<br><span style="color:var(--teal)">✓ ตั้งค่าไว้แล้ว พร้อมออกแบบสุ่ม</span>` : `<br><span style="color:var(--amber)">⚠️ ยังตั้งไม่ครบ (ต้องมีชื่อการ์ด + บทลงโทษ) การ์ดนี้จะยังไม่ออกจนกว่าจะตั้งครบ</span>`}
+      </div>
+      <div style="display:flex; justify-content:center; margin-bottom:16px;">
+        <div class="avatar-wrap">
+          ${sc.photo ? `<img class="avatar-lg" src="${sc.photo}">` : `<div class="avatar-lg-placeholder">⚡</div>`}
+          <button class="photo-btn-lg" id="special-photo-btn">📷</button>
+          <input type="file" accept="image/*" id="special-photo-input" style="display:none">
+        </div>
+      </div>
+      <div class="section-label">ชื่อการ์ดพิเศษ</div>
+      <input type="text" id="special-name-input" placeholder="เช่น การ์ดมรณะ, King of the Night..." value="${esc(sc.name)}" style="margin-bottom:14px;" />
+      <div class="section-label">บทลงโทษ (ออกทันทีเมื่อการ์ดนี้ออก)</div>
+      <input type="text" id="special-penalty-input" placeholder="เช่น ดื่มรวด 1 แก้ว!" value="${esc(sc.penaltyText)}" style="margin-bottom:8px;" />
+    `;
   }
   return `
     <div class="overlay" id="settings-overlay">
@@ -956,6 +1048,7 @@ function renderSettings(){
           <button class="tab ${tab==='types'?'active':''}" data-tab="types">ประเภทการ์ด</button>
           <button class="tab ${tab==='challenges'?'active':''}" data-tab="challenges">ชาเลนจ์</button>
           <button class="tab ${tab==='penalties'?'active':''}" data-tab="penalties">บทลงโทษ</button>
+          <button class="tab ${tab==='special'?'active':''}" data-tab="special">⚡ การ์ดพิเศษ</button>
         </div>
         ${body}
       </div>
@@ -1051,6 +1144,17 @@ function bindEvents(){
     addPenaltyBtn.onclick = ()=> { addPenalty(newPenaltyInput.value); };
     newPenaltyInput.onkeydown = (e)=>{ if(e.key==='Enter') addPenalty(newPenaltyInput.value); };
   }
+
+  const specialPhotoBtn = document.getElementById('special-photo-btn');
+  const specialPhotoInput = document.getElementById('special-photo-input');
+  if(specialPhotoBtn && specialPhotoInput){
+    specialPhotoBtn.onclick = ()=> specialPhotoInput.click();
+    specialPhotoInput.onchange = ()=>{ const f=specialPhotoInput.files&&specialPhotoInput.files[0]; if(f) handleSpecialCardPhotoFile(f); };
+  }
+  const specialNameInput = document.getElementById('special-name-input');
+  if(specialNameInput) specialNameInput.onchange = ()=> updateSpecialCard('name', specialNameInput.value);
+  const specialPenaltyInput = document.getElementById('special-penalty-input');
+  if(specialPenaltyInput) specialPenaltyInput.onchange = ()=> updateSpecialCard('penaltyText', specialPenaltyInput.value);
 }
 
 /* ============ Housekeeping: delete stale rooms (older than 24h) ============ */
